@@ -196,3 +196,104 @@
     false
   )
 )
+
+;; Retrieve post content and metadata
+(define-read-only (get-post (post-id uint))
+  (map-get? posts { post-id: post-id })
+)
+
+;; Get next available profile identifier
+(define-read-only (get-next-profile-id)
+  (var-get next-profile-id)
+)
+
+;; Get next available post identifier
+(define-read-only (get-next-post-id)
+  (var-get next-post-id)
+)
+
+;; Calculate dynamic reputation score based on stakes and activity
+(define-read-only (calculate-reputation-score (profile-id uint))
+  (match (get-profile profile-id)
+    profile-data (let (
+        (base-score (get staked-amount profile-data))
+        (follower-bonus (* (get follower-count profile-data) u1000))
+        (endorsement-bonus (* (get total-endorsements profile-data) u2000))
+        (post-bonus (* (get post-count profile-data) u500))
+      )
+      (+ base-score (+ follower-bonus (+ endorsement-bonus post-bonus)))
+    )
+    u0
+  )
+)
+
+;; Public Functions - Core Protocol Actions
+
+;; Create new user profile with initial reputation stake
+(define-public (create-profile
+    (username (string-ascii 50))
+    (bio (string-utf8 280))
+    (avatar-url (string-ascii 200))
+  )
+  (let (
+      (profile-id (var-get next-profile-id))
+      (current-block stacks-block-height)
+    )
+    ;; Prevent duplicate profile creation per wallet
+    (asserts! (is-none (map-get? principal-to-profile tx-sender))
+      ERR_PROFILE_EXISTS
+    )
+
+    ;; Ensure username uniqueness across platform
+    (asserts! (is-username-available username) ERR_PROFILE_EXISTS)
+
+    ;; Verify sufficient balance for minimum stake
+    (asserts! (>= (stx-get-balance tx-sender) MIN_PROFILE_STAKE)
+      ERR_INSUFFICIENT_FUNDS
+    )
+
+    ;; Transfer stake to protocol escrow
+    (try! (stx-transfer? MIN_PROFILE_STAKE tx-sender (as-contract tx-sender)))
+
+    ;; Initialize new profile with stake-backed reputation
+    (map-set profiles { profile-id: profile-id } {
+      owner: tx-sender,
+      username: username,
+      bio: bio,
+      avatar-url: avatar-url,
+      created-at: current-block,
+      staked-amount: MIN_PROFILE_STAKE,
+      reputation-score: MIN_PROFILE_STAKE,
+      follower-count: u0,
+      following-count: u0,
+      post-count: u0,
+      total-endorsements: u0,
+      is-active: true,
+    })
+
+    ;; Establish global identity mappings
+    (map-set username-to-profile username profile-id)
+    (map-set principal-to-profile tx-sender profile-id)
+    (map-set profile-stakes {
+      profile-id: profile-id,
+      staker: tx-sender,
+    } {
+      amount: MIN_PROFILE_STAKE,
+      staked-at: current-block,
+    })
+
+    ;; Increment global profile counter
+    (var-set next-profile-id (+ profile-id u1))
+
+    (ok profile-id)
+  )
+)
+
+;; Establish verified social connection
+(define-public (follow-user (following-id uint))
+  (let (
+      (follower-profile-result (map-get? principal-to-profile tx-sender))
+      (current-block stacks-block-height)
+    )
+    ;; Resolve follower identity from wallet address
+    (match follower-profile-result
