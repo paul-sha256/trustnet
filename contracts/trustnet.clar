@@ -614,3 +614,59 @@
     )
   )
 )
+
+;; Increase reputation through additional staking
+(define-public (stake-for-reputation (amount uint))
+  (let (
+      (profile-result (map-get? principal-to-profile tx-sender))
+      (current-block stacks-block-height)
+    )
+    ;; Enforce minimum additional stake amount
+    (asserts! (>= amount MIN_POST_BOOST) ERR_INVALID_AMOUNT)
+
+    ;; Verify sufficient wallet balance
+    (asserts! (>= (stx-get-balance tx-sender) amount) ERR_INSUFFICIENT_FUNDS)
+
+    (match profile-result
+      profile-id (begin
+        ;; Transfer additional stake to protocol
+        (try! (stx-transfer? amount tx-sender (as-contract tx-sender)))
+
+        ;; Increase profile's total staked amount
+        (match (get-profile profile-id)
+          profile-data (map-set profiles { profile-id: profile-id }
+            (merge profile-data { staked-amount: (+ (get staked-amount profile-data) amount) })
+          )
+          false
+        )
+
+        ;; Record additional stake commitment
+        (map-set profile-stakes {
+          profile-id: profile-id,
+          staker: tx-sender,
+        } {
+          amount: amount,
+          staked-at: current-block,
+        })
+
+        (ok true)
+      )
+      ERR_PROFILE_NOT_FOUND
+    )
+  )
+)
+
+;; Administrative Functions
+
+;; Update protocol fee rate (Owner only)
+(define-public (set-protocol-fee-rate (new-rate uint))
+  (begin
+    ;; Restrict access to contract owner
+    (asserts! (is-eq tx-sender CONTRACT_OWNER) ERR_UNAUTHORIZED)
+    ;; Cap maximum fee at 10% (1000 basis points)
+    (asserts! (<= new-rate u1000) ERR_INVALID_AMOUNT)
+    ;; Update protocol fee configuration
+    (var-set protocol-fee-rate new-rate)
+    (ok true)
+  )
+)
