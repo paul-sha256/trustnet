@@ -297,3 +297,122 @@
     )
     ;; Resolve follower identity from wallet address
     (match follower-profile-result
+    follower-id (begin
+        ;; Prevent self-following to maintain graph integrity
+        (asserts! (not (is-eq follower-id following-id)) ERR_SELF_FOLLOW)
+
+        ;; Verify target profile exists and is active
+        (asserts! (is-some (get-profile following-id)) ERR_PROFILE_NOT_FOUND)
+
+        ;; Prevent duplicate follow relationships
+        (asserts! (not (is-following follower-id following-id))
+          ERR_ALREADY_FOLLOWING
+        )
+
+        ;; Record timestamped social connection
+        (map-set following {
+          follower: follower-id,
+          following: following-id,
+        } {
+          followed-at: current-block,
+          is-active: true,
+        })
+
+        ;; Increment follower count for target user
+        (match (get-profile following-id)
+          following-profile (map-set profiles { profile-id: following-id }
+            (merge following-profile { follower-count: (+ (get follower-count following-profile) u1) })
+          )
+          false
+        )
+
+        ;; Increment following count for initiating user
+        (match (get-profile follower-id)
+          follower-profile (map-set profiles { profile-id: follower-id }
+            (merge follower-profile { following-count: (+ (get following-count follower-profile) u1) })
+          )
+          false
+        )
+
+        (ok true)
+      )
+      ERR_PROFILE_NOT_FOUND
+    )
+  )
+)
+
+;; Remove social connection and update metrics
+(define-public (unfollow-user (following-id uint))
+  (let ((follower-profile-result (map-get? principal-to-profile tx-sender)))
+    ;; Resolve follower identity
+    (match follower-profile-result
+      follower-id (begin
+        ;; Verify existing follow relationship
+        (asserts! (is-following follower-id following-id) ERR_NOT_FOLLOWING)
+
+        ;; Remove connection from social graph
+        (map-delete following {
+          follower: follower-id,
+          following: following-id,
+        })
+
+        ;; Decrement follower count for target user
+        (match (get-profile following-id)
+          following-profile (map-set profiles { profile-id: following-id }
+            (merge following-profile { follower-count: (- (get follower-count following-profile) u1) })
+          )
+          false
+        )
+
+        ;; Decrement following count for initiating user
+        (match (get-profile follower-id)
+          follower-profile (map-set profiles { profile-id: follower-id }
+            (merge follower-profile { following-count: (- (get following-count follower-profile) u1) })
+          )
+          false
+        )
+
+        (ok true)
+      )
+      ERR_PROFILE_NOT_FOUND
+    )
+  )
+)
+
+;; Publish content to decentralized social graph
+(define-public (create-post (content (string-utf8 500)))
+  (let (
+      (author-profile-result (map-get? principal-to-profile tx-sender))
+      (post-id (var-get next-post-id))
+      (current-block stacks-block-height)
+    )
+    ;; Resolve author profile from wallet address
+    (match author-profile-result
+      author-id (begin
+        ;; Create immutable content record with metadata
+        (map-set posts { post-id: post-id } {
+          author: author-id,
+          content: content,
+          created-at: current-block,
+          boosted-amount: u0,
+          endorsement-count: u0,
+          is-active: true,
+        })
+
+        ;; Increment author's total post count
+        (match (get-profile author-id)
+          author-profile (map-set profiles { profile-id: author-id }
+            (merge author-profile { post-count: (+ (get post-count author-profile) u1) })
+          )
+          false
+        )
+
+        ;; Increment global post identifier
+        (var-set next-post-id (+ post-id u1))
+
+        (ok post-id)
+      )
+      ERR_PROFILE_NOT_FOUND
+    )
+  )
+)
