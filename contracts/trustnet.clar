@@ -525,3 +525,92 @@
     )
   )
 )
+
+;; Provide peer-to-peer reputation endorsement with message
+(define-public (endorse-profile
+    (endorsed-id uint)
+    (stake-amount uint)
+    (message (string-utf8 140))
+  )
+  (let (
+      (endorser-profile-result (map-get? principal-to-profile tx-sender))
+      (current-block stacks-block-height)
+    )
+    ;; Enforce minimum endorsement stake
+    (asserts! (>= stake-amount MIN_ENDORSEMENT_STAKE) ERR_INVALID_AMOUNT)
+
+    ;; Verify target profile exists
+    (asserts! (is-some (get-profile endorsed-id)) ERR_PROFILE_NOT_FOUND)
+
+    ;; Resolve endorser identity
+    (match endorser-profile-result
+      endorser-id (begin
+        ;; Prevent self-endorsement for reputation integrity
+        (asserts! (not (is-eq endorser-id endorsed-id)) ERR_UNAUTHORIZED)
+
+        ;; Prevent duplicate profile endorsements
+        (asserts!
+          (is-none (map-get? profile-endorsements {
+            endorser: endorser-id,
+            endorsed: endorsed-id,
+          }))
+          ERR_ALREADY_ENDORSED
+        )
+
+        ;; Verify sufficient stake balance
+        (asserts! (>= (stx-get-balance tx-sender) stake-amount)
+          ERR_INSUFFICIENT_FUNDS
+        )
+
+        ;; Lock endorsement stake in protocol escrow
+        (try! (stx-transfer? stake-amount tx-sender (as-contract tx-sender)))
+
+        ;; Record profile endorsement with testimonial message
+        (map-set profile-endorsements {
+          endorser: endorser-id,
+          endorsed: endorsed-id,
+        } {
+          endorsed-at: current-block,
+          stake-amount: stake-amount,
+          message: message,
+        })
+
+        ;; Increment endorsed profile's reputation metrics
+        (match (get-profile endorsed-id)
+          endorsed-profile (map-set profiles { profile-id: endorsed-id }
+            (merge endorsed-profile { total-endorsements: (+ (get total-endorsements endorsed-profile) u1) })
+          )
+          false
+        )
+
+        (ok true)
+      )
+      ERR_PROFILE_NOT_FOUND
+    )
+  )
+)
+
+;; Update mutable profile information
+(define-public (update-profile
+    (bio (string-utf8 280))
+    (avatar-url (string-ascii 200))
+  )
+  (let ((profile-result (map-get? principal-to-profile tx-sender)))
+    (match profile-result
+      profile-id (match (get-profile profile-id)
+        profile-data (begin
+          ;; Update editable profile fields
+          (map-set profiles { profile-id: profile-id }
+            (merge profile-data {
+              bio: bio,
+              avatar-url: avatar-url,
+            })
+          )
+          (ok true)
+        )
+        ERR_PROFILE_NOT_FOUND
+      )
+      ERR_PROFILE_NOT_FOUND
+    )
+  )
+)
