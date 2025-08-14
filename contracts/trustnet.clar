@@ -92,3 +92,107 @@
     is-active: bool,
   }
 )
+
+;; Content Repository - Immutable post storage
+(define-map posts
+  { post-id: uint }
+  {
+    author: uint,
+    content: (string-utf8 500),
+    created-at: uint,
+    boosted-amount: uint,
+    endorsement-count: uint,
+    is-active: bool,
+  }
+)
+
+;; Post Endorsement System - Stake-backed content validation
+(define-map post-endorsements
+  {
+    post-id: uint,
+    endorser: uint,
+  }
+  {
+    endorsed-at: uint,
+    stake-amount: uint,
+  }
+)
+
+;; Profile Endorsement Network - Peer reputation validation
+(define-map profile-endorsements
+  {
+    endorser: uint,
+    endorsed: uint,
+  }
+  {
+    endorsed-at: uint,
+    stake-amount: uint,
+    message: (string-utf8 140),
+  }
+)
+
+;; Reputation Staking Pools - Profile-specific stake tracking
+(define-map profile-stakes
+  {
+    profile-id: uint,
+    staker: principal,
+  }
+  {
+    amount: uint,
+    staked-at: uint,
+  }
+)
+
+;; Content Monetization Stakes - Post boost tracking
+(define-map post-boosts
+  {
+    post-id: uint,
+    booster: principal,
+  }
+  {
+    amount: uint,
+    boosted-at: uint,
+  }
+)
+
+;; Read-Only Functions - Data Queries
+
+;; Retrieve complete profile information by ID
+(define-read-only (get-profile (profile-id uint))
+  (map-get? profiles { profile-id: profile-id })
+)
+
+;; Find profile using unique username
+(define-read-only (get-profile-by-username (username (string-ascii 50)))
+  (match (map-get? username-to-profile username)
+    profile-id (get-profile profile-id)
+    none
+  )
+)
+
+;; Resolve profile from wallet address
+(define-read-only (get-profile-by-principal (user principal))
+  (match (map-get? principal-to-profile user)
+    profile-id (get-profile profile-id)
+    none
+  )
+)
+
+;; Check username availability for registration
+(define-read-only (is-username-available (username (string-ascii 50)))
+  (is-none (map-get? username-to-profile username))
+)
+
+;; Verify active following relationship between users
+(define-read-only (is-following
+    (follower-id uint)
+    (following-id uint)
+  )
+  (match (map-get? following {
+    follower: follower-id,
+    following: following-id,
+  })
+    follow-data (get is-active follow-data)
+    false
+  )
+)
