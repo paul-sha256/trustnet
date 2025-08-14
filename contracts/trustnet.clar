@@ -416,3 +416,112 @@
     )
   )
 )
+
+;; Amplify content visibility through economic backing
+(define-public (boost-post
+    (post-id uint)
+    (amount uint)
+  )
+  (let ((current-block stacks-block-height))
+    ;; Enforce minimum boost threshold
+    (asserts! (>= amount MIN_POST_BOOST) ERR_INVALID_AMOUNT)
+
+    ;; Verify target post exists
+    (asserts! (is-some (get-post post-id)) ERR_POST_NOT_FOUND)
+
+    ;; Confirm sufficient wallet balance
+    (asserts! (>= (stx-get-balance tx-sender) amount) ERR_INSUFFICIENT_FUNDS)
+
+    ;; Transfer boost funds to protocol treasury
+    (try! (stx-transfer? amount tx-sender (as-contract tx-sender)))
+
+    ;; Record boost transaction with timestamp
+    (map-set post-boosts {
+      post-id: post-id,
+      booster: tx-sender,
+    } {
+      amount: amount,
+      boosted-at: current-block,
+    })
+
+    ;; Accumulate total boost value for post
+    (match (get-post post-id)
+      post-data (map-set posts { post-id: post-id }
+        (merge post-data { boosted-amount: (+ (get boosted-amount post-data) amount) })
+      )
+      false
+    )
+
+    (ok true)
+  )
+)
+
+;; Provide stake-backed endorsement for content quality
+(define-public (endorse-post
+    (post-id uint)
+    (stake-amount uint)
+  )
+  (let (
+      (endorser-profile-result (map-get? principal-to-profile tx-sender))
+      (current-block stacks-block-height)
+    )
+    ;; Enforce minimum endorsement stake requirement
+    (asserts! (>= stake-amount MIN_ENDORSEMENT_STAKE) ERR_INVALID_AMOUNT)
+
+    ;; Verify target post exists and is active
+    (asserts! (is-some (get-post post-id)) ERR_POST_NOT_FOUND)
+
+    ;; Resolve endorser profile
+    (match endorser-profile-result
+      endorser-id (begin
+        ;; Prevent duplicate endorsements per user
+        (asserts!
+          (is-none (map-get? post-endorsements {
+            post-id: post-id,
+            endorser: endorser-id,
+          }))
+          ERR_ALREADY_ENDORSED
+        )
+
+        ;; Verify sufficient stake balance
+        (asserts! (>= (stx-get-balance tx-sender) stake-amount)
+          ERR_INSUFFICIENT_FUNDS
+        )
+
+        ;; Lock endorsement stake in protocol
+        (try! (stx-transfer? stake-amount tx-sender (as-contract tx-sender)))
+
+        ;; Record stake-backed endorsement
+        (map-set post-endorsements {
+          post-id: post-id,
+          endorser: endorser-id,
+        } {
+          endorsed-at: current-block,
+          stake-amount: stake-amount,
+        })
+
+        ;; Increment post's endorsement counter
+        (match (get-post post-id)
+          post-data (map-set posts { post-id: post-id }
+            (merge post-data { endorsement-count: (+ (get endorsement-count post-data) u1) })
+          )
+          false
+        )
+
+        ;; Boost content author's reputation through endorsement
+        (match (get-post post-id)
+          post-data (match (get-profile (get author post-data))
+            author-profile (map-set profiles { profile-id: (get author post-data) }
+              (merge author-profile { total-endorsements: (+ (get total-endorsements author-profile) u1) })
+            )
+            false
+          )
+          false
+        )
+
+        (ok true)
+      )
+      ERR_PROFILE_NOT_FOUND
+    )
+  )
+)
